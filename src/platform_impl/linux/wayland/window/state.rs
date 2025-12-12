@@ -150,6 +150,9 @@ pub struct WindowState {
     /// The value is the serial of the event triggered moved.
     has_pending_move: Option<u32>,
 
+    /// Whether the window is currently visible.
+    visible: bool,
+
     /// The underlying SCTK window.
     pub window: Window,
 
@@ -217,6 +220,7 @@ impl WindowState {
             title: String::default(),
             transparent: false,
             viewport,
+            visible: true,
             window,
         }
     }
@@ -496,6 +500,18 @@ impl WindowState {
         self.resizable
     }
 
+    /// Get the visibility state of the window.
+    #[inline]
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Set the visibility state of the window.
+    #[inline]
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
     /// Set the resizable state on the window.
     ///
     /// Returns `true` when the state was applied.
@@ -595,6 +611,13 @@ impl WindowState {
 
     /// Refresh the decorations frame if it's present returning whether the client should redraw.
     pub fn refresh_frame(&mut self) -> bool {
+        // If the window is not visible, we don't want to drive any redraws or
+        // cause new buffers to be attached. This prevents hidden windows from
+        // being shown again by decoration updates.
+        if !self.visible {
+            return false;
+        }
+
         if let Some(frame) = self.frame.as_mut() {
             if !frame.is_hidden() && frame.is_dirty() {
                 return frame.draw();

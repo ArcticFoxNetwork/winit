@@ -244,13 +244,47 @@ impl Window {
     }
 
     #[inline]
-    pub fn set_visible(&self, _visible: bool) {
-        // Not possible on Wayland.
+    pub fn set_visible(&self, visible: bool) {
+        // According to the xdg-shell protocol:
+        // - "Attaching a null buffer to a toplevel unmaps the surface."
+        // - "The client can re-map the toplevel by performing a commit without any
+        //    buffer attached, waiting for a configure event and handling it as usual."
+        //
+        // We keep the xdg_toplevel alive and only manipulate the wl_surface contents.
+
+        let surface = self.window.wl_surface();
+
+        if visible {
+            {
+                let mut state = self.window_state.lock().unwrap();
+                state.set_visible(true);
+                // Reset frame callback state to break the deadlock.
+                // When hidden, compositor stops sending frame callbacks, leaving state as Requested.
+                // We need to reset it so the event loop will dispatch RedrawRequested.
+                state.frame_callback_reset();
+            }
+
+            // Commit to signal the compositor.
+            surface.commit();
+
+            // Ask the application to redraw so that a buffer is re-attached.
+            self.request_redraw();
+        } else {
+            // Remember requested visibility for `is_visible`.
+            self.window_state.lock().unwrap().set_visible(false);
+
+            // Clear any pending redraw requests to prevent them from re-showing the window.
+            self.window_requests.redraw_requested.store(false, Ordering::Relaxed);
+
+            // Unmap by attaching a null buffer and committing, as required by the spec.
+            surface.attach(None, 0, 0);
+            surface.commit();
+        }
     }
 
     #[inline]
     pub fn is_visible(&self) -> Option<bool> {
-        None
+        Some(self.window_state.lock().unwrap().visible())
     }
 
     #[inline]
@@ -277,6 +311,12 @@ impl Window {
 
     #[inline]
     pub fn request_redraw(&self) {
+        // Don't request redraw if window is hidden - this prevents hidden windows
+        // from being accidentally shown by pending redraw requests.
+        if !self.window_state.lock().unwrap().visible() {
+            return;
+        }
+
         // NOTE: try to not wake up the loop when the event was already scheduled and not yet
         // processed by the loop, because if at this point the value was `true` it could only
         // mean that the loop still haven't dispatched the value to the client and will do

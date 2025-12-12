@@ -483,6 +483,13 @@ impl<T: 'static> EventLoop<T> {
                 let mut window =
                     state.windows.get_mut().get_mut(window_id).unwrap().lock().unwrap();
 
+                // Don't dispatch RedrawRequested for hidden windows.
+                if !window.visible() {
+                    // Clear any pending redraw request for hidden windows.
+                    window_requests.get(window_id).unwrap().take_redraw_requested();
+                    return None;
+                }
+
                 if window.frame_callback_state() == FrameCallbackState::Requested {
                     return None;
                 }
