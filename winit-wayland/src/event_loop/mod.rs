@@ -379,9 +379,14 @@ impl EventLoop {
                 }
             }
 
+            if compositor_update.shown {
+                app.window_event(&self.active_event_loop, window_id, WindowEvent::Shown);
+            }
+
             // NOTE: Rescale changed the physical size which winit operates in, thus we should
             // resize.
-            if compositor_update.resized || compositor_update.scale_changed {
+            if compositor_update.resized || compositor_update.scale_changed || compositor_update.restored
+            {
                 let physical_size = self.with_state(|state| {
                     let windows = state.windows.get_mut();
                     let window = windows.get(&window_id).unwrap().lock().unwrap();

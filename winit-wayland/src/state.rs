@@ -302,7 +302,7 @@ impl WindowHandler for WinitState {
         };
 
         // Populate the configure to the window.
-        self.window_compositor_updates[pos].resized |= self
+        let configure_result = self
             .windows
             .get_mut()
             .get_mut(&window_id)
@@ -310,6 +310,9 @@ impl WindowHandler for WinitState {
             .lock()
             .unwrap()
             .configure(configure, &self.shm, &self.subcompositor_state);
+        self.window_compositor_updates[pos].resized |= configure_result.resized;
+        self.window_compositor_updates[pos].restored |= configure_result.restored;
+        self.window_compositor_updates[pos].shown |= configure_result.shown;
 
         // NOTE: configure demands wl_surface::commit, however winit doesn't commit on behalf of the
         // users, since it can break a lot of things, thus it'll ask users to redraw instead.
@@ -432,6 +435,12 @@ pub struct WindowCompositorUpdate {
     /// New window size.
     pub resized: bool,
 
+    /// The compositor inferred a restore from minimized state.
+    pub restored: bool,
+
+    /// The window completed a show transition and is ready to present.
+    pub shown: bool,
+
     /// New scale factor.
     pub scale_changed: bool,
 
@@ -441,7 +450,14 @@ pub struct WindowCompositorUpdate {
 
 impl WindowCompositorUpdate {
     fn new(window_id: WindowId) -> Self {
-        Self { window_id, resized: false, scale_changed: false, close_window: false }
+        Self {
+            window_id,
+            resized: false,
+            restored: false,
+            shown: false,
+            scale_changed: false,
+            close_window: false,
+        }
     }
 }
 

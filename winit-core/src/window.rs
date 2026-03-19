@@ -889,7 +889,8 @@ pub trait Window: AsAny + Send + Sync + fmt::Debug {
     ///
     /// ## Platform-specific
     ///
-    /// - **Android / Wayland / Web:** Unsupported.
+    /// - **Android / Web:** Unsupported.
+    /// - **Wayland:** Hides/shows the window by unmapping/remapping its shell role while preserving the underlying `wl_surface`.
     fn set_visible(&self, visible: bool);
 
     /// Gets the window's current visibility state.
@@ -900,7 +901,7 @@ pub trait Window: AsAny + Send + Sync + fmt::Debug {
     /// ## Platform-specific
     ///
     /// - **X11:** Not implemented.
-    /// - **Wayland / iOS / Android / Web:** Unsupported.
+    /// - **Wayland / iOS / Android / Web:** Returns backend-dependent local state when available.
     fn is_visible(&self) -> Option<bool>;
 
     /// Sets whether the window is resizable or not.
@@ -962,7 +963,9 @@ pub trait Window: AsAny + Send + Sync + fmt::Debug {
     ///
     /// ## Platform-specific
     ///
-    /// - **Wayland**: always `None`.
+    /// - You shouldn't stop rendering for minimized windows, however you could lower the fps.
+    ///
+    /// - **Wayland**: Returns backend-dependent local state when available.
     /// - **iOS / Android / Web / Orbital:** Unsupported.
     fn is_minimized(&self) -> Option<bool>;
 

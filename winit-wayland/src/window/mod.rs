@@ -6,13 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dpi::{LogicalSize, PhysicalInsets, PhysicalPosition, PhysicalSize, Position, Size};
-use sctk::compositor::{CompositorState, Region, SurfaceData};
+use sctk::compositor::{CompositorState, Region};
 use sctk::reexports::client::protocol::wl_display::WlDisplay;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Proxy, QueueHandle};
 use sctk::reexports::protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
-use sctk::shell::WaylandSurface;
-use sctk::shell::xdg::window::{Window as SctkWindow, WindowDecorations};
+use sctk::shell::xdg::window::WindowDecorations;
 use tracing::warn;
 use winit_core::cursor::Cursor;
 use winit_core::error::{NotSupportedError, RequestError};
@@ -39,11 +38,11 @@ pub use state::WindowState;
 /// The Wayland window.
 #[derive(Debug)]
 pub struct Window {
-    /// Reference to the underlying SCTK window.
-    window: SctkWindow,
-
     /// Window id.
     window_id: WindowId,
+
+    /// The persistent wl_surface reused across Wayland hide/show.
+    surface: WlSurface,
 
     /// The state of the window.
     window_state: Arc<Mutex<WindowState>>,
@@ -133,9 +132,7 @@ impl Window {
         window_state.set_decorate(attributes.decorations);
 
         // Set the app_id.
-        if let Some(name) = app_name.map(|name| name.general) {
-            window.set_app_id(name);
-        }
+        window_state.set_app_id(app_name.map(|name| name.general));
 
         // Set the window title.
         window_state.set_title(attributes.title);
@@ -157,13 +154,12 @@ impl Window {
             },
             Some(Fullscreen::Borderless(monitor)) => {
                 let output = monitor.as_ref().and_then(|monitor| {
-                    monitor.cast_ref::<output::MonitorHandle>().map(|handle| &handle.proxy)
+                    monitor.cast_ref::<output::MonitorHandle>().map(|handle| handle.proxy.clone())
                 });
 
-                window.set_fullscreen(output)
+                window_state.set_fullscreen(true, output)
             },
-            _ if attributes.maximized => window.set_maximized(),
-            _ => (),
+            None => window_state.set_maximized(attributes.maximized),
         };
 
         match attributes.cursor {
@@ -183,7 +179,7 @@ impl Window {
         }
 
         // XXX Do initial commit.
-        window.commit();
+        surface.commit();
 
         // Add the window and window requests into the state.
         let window_state = Arc::new(Mutex::new(window_state));
@@ -216,7 +212,7 @@ impl Window {
         event_loop_awakener.ping();
 
         Ok(Self {
-            window,
+            surface,
             display,
             monitors,
             window_id,
@@ -232,7 +228,7 @@ impl Window {
     }
 
     pub(crate) fn xdg_toplevel(&self) -> Option<NonNull<c_void>> {
-        NonNull::new(self.window.xdg_toplevel().id().as_ptr().cast())
+        self.window_state.lock().unwrap().xdg_toplevel()
     }
 }
 
@@ -253,9 +249,42 @@ impl Window {
         Ok(serial)
     }
 
+    fn hide(&self) {
+        let mut window_state = self.window_state.lock().unwrap();
+
+        if !window_state.visible() {
+            return;
+        }
+
+        let surface = self.surface().clone();
+        window_state.set_visible(false);
+        drop(window_state);
+
+        surface.attach(None, 0, 0);
+        surface.commit();
+        self.window_requests.redraw_requested.store(false, Ordering::Relaxed);
+        self.event_loop_awakener.ping();
+    }
+
+    fn show(&self) {
+        let mut window_state = self.window_state.lock().unwrap();
+
+        if window_state.visible() {
+            return;
+        }
+
+        window_state.set_visible(true);
+        let surface = self.surface().clone();
+        drop(window_state);
+
+        surface.commit();
+        self.request_redraw();
+        self.event_loop_awakener.ping();
+    }
+
     #[inline]
     pub fn surface(&self) -> &WlSurface {
-        self.window.wl_surface()
+        &self.surface
     }
 }
 
@@ -269,7 +298,7 @@ impl Drop for Window {
 impl rwh_06::HasWindowHandle for Window {
     fn window_handle(&self) -> Result<rwh_06::WindowHandle<'_>, rwh_06::HandleError> {
         let raw = rwh_06::WaylandWindowHandle::new({
-            let ptr = self.window.wl_surface().id().as_ptr();
+            let ptr = self.surface().id().as_ptr();
             std::ptr::NonNull::new(ptr as *mut _).expect("wl_surface will never be null")
         });
 
@@ -400,12 +429,16 @@ impl CoreWindow for Window {
         self.window_state.lock().unwrap().set_transparent(transparent);
     }
 
-    fn set_visible(&self, _visible: bool) {
-        // Not possible on Wayland.
+    fn set_visible(&self, visible: bool) {
+        if visible {
+            self.show();
+        } else {
+            self.hide();
+        }
     }
 
     fn is_visible(&self) -> Option<bool> {
-        None
+        Some(self.window_state.lock().unwrap().visible())
     }
 
     fn set_resizable(&self, resizable: bool) {
@@ -429,63 +462,55 @@ impl CoreWindow for Window {
     }
 
     fn set_minimized(&self, minimized: bool) {
-        // You can't unminimize the window on Wayland.
-        if !minimized {
-            warn!("Unminimizing is ignored on Wayland.");
+        let mut window_state = self.window_state.lock().unwrap();
+
+        if minimized {
+            window_state.minimize();
             return;
         }
 
-        self.window.set_minimized();
+        if window_state.shadow_minimized() {
+            window_state.set_shadow_minimized(false);
+        } else {
+            warn!("Unminimizing is ignored on Wayland.");
+        }
     }
 
     fn is_minimized(&self) -> Option<bool> {
-        // XXX clients don't know whether they are minimized or not.
-        None
+        Some(self.window_state.lock().unwrap().shadow_minimized())
     }
 
     fn set_maximized(&self, maximized: bool) {
-        if maximized { self.window.set_maximized() } else { self.window.unset_maximized() }
+        self.window_state.lock().unwrap().set_maximized(maximized)
     }
 
     fn is_maximized(&self) -> bool {
-        self.window_state
-            .lock()
-            .unwrap()
-            .last_configure
-            .as_ref()
-            .map(|last_configure| last_configure.is_maximized())
-            .unwrap_or_default()
+        self.window_state.lock().unwrap().is_maximized()
     }
 
     fn set_fullscreen(&self, fullscreen: Option<Fullscreen>) {
+        let mut window_state = self.window_state.lock().unwrap();
+
         match fullscreen {
             Some(Fullscreen::Exclusive(..)) => {
                 warn!("`Fullscreen::Exclusive` is ignored on Wayland");
             },
             Some(Fullscreen::Borderless(monitor)) => {
                 let output = monitor.as_ref().and_then(|monitor| {
-                    monitor.cast_ref::<output::MonitorHandle>().map(|handle| &handle.proxy)
+                    monitor.cast_ref::<output::MonitorHandle>().map(|handle| handle.proxy.clone())
                 });
 
-                self.window.set_fullscreen(output)
+                window_state.set_fullscreen(true, output)
             },
-            None => self.window.unset_fullscreen(),
+            None => window_state.set_fullscreen(false, None),
         }
     }
 
     fn fullscreen(&self) -> Option<Fullscreen> {
-        let is_fullscreen = self
-            .window_state
-            .lock()
-            .unwrap()
-            .last_configure
-            .as_ref()
-            .map(|last_configure| last_configure.is_fullscreen())
-            .unwrap_or_default();
+        let window_state = self.window_state.lock().unwrap();
 
-        if is_fullscreen {
-            let current_monitor = self.current_monitor();
-            Some(Fullscreen::Borderless(current_monitor))
+        if window_state.is_fullscreen() {
+            Some(Fullscreen::Borderless(window_state.current_monitor()))
         } else {
             None
         }
@@ -620,7 +645,7 @@ impl CoreWindow for Window {
     }
 
     fn set_cursor_hittest(&self, hittest: bool) -> Result<(), RequestError> {
-        let surface = self.window.wl_surface();
+        let surface = self.surface();
 
         if hittest {
             surface.set_input_region(None);
@@ -634,11 +659,7 @@ impl CoreWindow for Window {
     }
 
     fn current_monitor(&self) -> Option<CoreMonitorHandle> {
-        let data = self.window.wl_surface().data::<SurfaceData>()?;
-        data.outputs()
-            .next()
-            .map(MonitorHandle::new)
-            .map(|monitor| CoreMonitorHandle(Arc::new(monitor)))
+        self.window_state.lock().unwrap().current_monitor()
     }
 
     fn available_monitors(&self) -> Box<dyn Iterator<Item = CoreMonitorHandle>> {

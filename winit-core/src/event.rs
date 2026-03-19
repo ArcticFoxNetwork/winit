@@ -59,6 +59,14 @@ pub enum WindowEvent {
     /// [`Window::surface_size`]: crate::window::Window::surface_size
     SurfaceResized(PhysicalSize<u32>),
 
+    /// The window completed a platform-specific show/restore transition and is ready to present.
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **Wayland:** Emitted after the first post-show configure is processed.
+    /// - **Others:** Unsupported.
+    Shown,
+
     /// The position of the window has changed.
     ///
     /// Contains the window's new position in desktop coordinates (can also be retrieved with
@@ -1547,6 +1555,7 @@ mod tests {
             with_window_event(Focused(true));
             with_window_event(Moved((0, 0).into()));
             with_window_event(SurfaceResized((0, 0).into()));
+            with_window_event(Shown);
             with_window_event(DragEntered { paths: vec!["x.txt".into()], position: (0, 0).into() });
             with_window_event(DragMoved { position: (0, 0).into() });
             with_window_event(DragDropped { paths: vec!["x.txt".into()], position: (0, 0).into() });

@@ -60,6 +60,7 @@ wayland-csd-adwaita-notitle = ["winit-wayland/csd-adwaita-notitle"]
 wayland-csd-adwaita-notitlebar = ["winit-wayland/csd-adwaita-notitlebar"]
 wayland-dlopen = ["winit-wayland/dlopen"]
 x11 = ["winit-x11"]
+rwh_06 = []
 
 [build-dependencies]
 cfg_aliases.workspace = true

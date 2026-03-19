@@ -95,3 +95,6 @@ wasm-bindgen-futures = "0.4.43"
 wasm-bindgen-test = "0.3"
 web-time = "1"
 web_sys = { package = "web-sys", version = "0.3.70" }
+
+[patch.crates-io]
+smithay-client-toolkit = { git = "https://github.com/Fei-xiangShi/client-toolkit.git", rev = "95e830598b86da7104a63dbe81b8c7cdf4f9431f" }
